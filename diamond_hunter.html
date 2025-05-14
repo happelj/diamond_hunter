@@ -8,8 +8,6 @@
     #overlay { position: absolute; top: 10px; left: 10px; color: #fff; font-family: sans-serif; z-index: 1; }
     #startButton { position: absolute; top: 50%; width: 100%; text-align: center; color: #fff; font-family: sans-serif; cursor: pointer; }
   </style>
-
-  <!-- Import map for Three.js ES modules -->
   <script type="importmap">
   {
     "imports": {
@@ -30,62 +28,92 @@
     let camera, scene, renderer, controls;
     const diamonds = [];
     const monsters = [];
+    const monsterInitialPositions = [];
+    let totalDiamonds = 0;
     let score = 0;
     let won = false;
+    let lost = false;
 
-    const scoreEl = document.getElementById('score');
+    // Fireworks particle class
+    class FireworkParticle {
+      constructor(position) {
+        const geom = new THREE.SphereGeometry(2, 8, 8);
+        const color = new THREE.Color().setHSL(Math.random(), 1.0, 0.5);
+        this.mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
+        this.mesh = new THREE.Mesh(geom, this.mat);
+        this.mesh.position.copy(position);
+        const dir = new THREE.Vector3((Math.random()*2-1), (Math.random()*2-1), (Math.random()*2-1)).normalize();
+        this.vel = dir.multiplyScalar(Math.random()*4 + 2);
+        this.age = 0;
+        this.life = Math.random()*40 + 60;
+      }
+      update() {
+        this.mesh.position.add(this.vel);
+        this.vel.y -= 0.1;
+        this.age++;
+        this.mat.opacity = 1 - this.age/this.life;
+        return this.age < this.life;
+      }
+    }
+    const fireworks = [];
+    let fireworksRunning = false;
+    let frameCount = 0;
+
+    // Collision boxes & settings
+    const collidableBoxes = [];
+    const boundary = { min: -1000, max: 1000 };
+    const playerCollider = { radius: 4 };
+    const monsterCollider = { radius: 5 };
+
+    let scoreEl;
+    let overlayHTML;
     const overlay = document.getElementById('overlay');
     const startBtn = document.getElementById('startButton');
+    const keys = {};
 
     init();
+
     function init() {
-      // Camera and scene
+      overlayHTML = overlay.innerHTML;
+      scoreEl = document.getElementById('score');
+
       camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 2000);
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x87ceeb);
       scene.fog = new THREE.Fog(0x87ceeb, 0, 750);
 
-      // Lights
       const hemi = new THREE.HemisphereLight(0xffffff, 0x444444);
-      hemi.position.set(0, 200, 0);
+      hemi.position.set(0,200,0);
       scene.add(hemi);
       const dir = new THREE.DirectionalLight(0xffffff);
-      dir.position.set(0, 200, 100);
+      dir.position.set(0,200,100);
       scene.add(dir);
 
-      // Controls
       controls = new PointerLockControls(camera, document.body);
-      startBtn.addEventListener('click', () => controls.lock());
-      controls.addEventListener('lock', () => { startBtn.style.display = 'none'; overlay.style.display = 'block'; });
-      controls.addEventListener('unlock', () => { overlay.style.display = 'none'; startBtn.style.display = 'block'; });
+      startBtn.addEventListener('click', () => { resetGame(); controls.lock(); });
+      controls.addEventListener('lock', () => { startBtn.style.display='none'; overlay.style.display='block'; });
+      controls.addEventListener('unlock', () => { overlay.style.display='none'; startBtn.style.display='block'; });
       scene.add(controls.getObject());
-      // Start player above ground
-      controls.getObject().position.set(0, 10, 0);
+      controls.getObject().position.set(0,10,0);
 
       // Floor
       const floor = new THREE.Mesh(
-        new THREE.PlaneGeometry(2000, 2000, 100, 100).rotateX(-Math.PI/2),
+        new THREE.PlaneGeometry(2000,2000,100,100).rotateX(-Math.PI/2),
         new THREE.MeshPhongMaterial({ color: 0x228B22 })
       );
       scene.add(floor);
 
       // Trees
-      for (let i = 0; i < 50; i++) {
-        const trunk = new THREE.Mesh(
-          new THREE.CylinderGeometry(1, 1, 10, 8),
-          new THREE.MeshPhongMaterial({ color: 0x8b4513 })
-        );
-        trunk.position.set(Math.random() * 1000 - 500, 5, Math.random() * 1000 - 500);
-        scene.add(trunk);
-        const leaves = new THREE.Mesh(
-          new THREE.SphereGeometry(5, 8, 8),
-          new THREE.MeshPhongMaterial({ color: 0x006400 })
-        );
-        leaves.position.set(trunk.position.x, trunk.position.y + 7, trunk.position.z);
-        scene.add(leaves);
-      }
+      spawnObjects('tree', 50, 7, (pos) => {
+        const t = new THREE.Mesh(new THREE.CylinderGeometry(1,1,10,8), new THREE.MeshPhongMaterial({color:0x8b4513}));
+        t.position.set(pos.x,5,pos.z);
+        scene.add(t); addCollider(t);
+        const l = new THREE.Mesh(new THREE.SphereGeometry(5,8,8), new THREE.MeshPhongMaterial({color:0x006400}));
+        l.position.set(pos.x,12,pos.z);
+        scene.add(l); addCollider(l);
+      });
 
-      // Mountains (upright cones)
+            // Mountains (upright cones)
       for (let i = 0; i < 8; i++) {
         const angle = (Math.PI * 2 / 8) * i;
         const radius = 800 + Math.random() * 200;
@@ -95,128 +123,221 @@
           new THREE.ConeGeometry(200, 400, 16),
           new THREE.MeshPhongMaterial({ color: 0x555555 })
         );
-        // Position so base sits on ground (half the cone height)
         mountain.position.set(x, 200, z);
         scene.add(mountain);
+        addCollider(mountain);
       }
 
       // Clouds
-      for (let i = 0; i < 20; i++) {
+      for(let i=0;i<20;i++){
         const cloud = new THREE.Group();
-        for (let j = 0; j < 5; j++) {
+        for(let j=0;j<5;j++){
           const c = new THREE.Mesh(
-            new THREE.SphereGeometry(20, 8, 8),
-            new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 })
+            new THREE.SphereGeometry(20,8,8),
+            new THREE.MeshPhongMaterial({color:0xffffff, transparent:true, opacity:0.8})
           );
-          c.position.set(Math.random() * 40 - 20, Math.random() * 10, Math.random() * 40 - 20);
+          c.position.set(Math.random()*40-20, Math.random()*10, Math.random()*40-20);
           cloud.add(c);
         }
-        cloud.position.set(Math.random() * 1600 - 800, 200 + Math.random() * 100, Math.random() * 1600 - 800);
+        cloud.position.set(Math.random()*1600-800, 200+Math.random()*100, Math.random()*1600-800);
         scene.add(cloud);
       }
 
       // Diamonds
-      const dGeo = new THREE.OctahedronGeometry(5);
-      const dMat = new THREE.MeshPhongMaterial({ color: 0x00ffff });
-      for (let i = 0; i < 100; i++) {
-        const d = new THREE.Mesh(dGeo, dMat);
-        d.position.set(Math.random() * 1000 - 500, 5, Math.random() * 1000 - 500);
-        scene.add(d);
-        diamonds.push(d);
-      }
+      spawnDiamonds(100);
+      totalDiamonds = diamonds.length;
 
       // Monsters
-      const mGeo = new THREE.BoxGeometry(10, 20, 10);
-      const mMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
-      for (let i = 0; i < 10; i++) {
-        const m = new THREE.Mesh(mGeo, mMat);
-        m.position.set(Math.random() * 1000 - 500, 10, Math.random() * 1000 - 500);
-        scene.add(m);
-        monsters.push(m);
-      }
+      spawnMonsters(10);
 
       // Renderer
       renderer = new THREE.WebGLRenderer();
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.body.appendChild(renderer.domElement);
 
-      // Input events
       window.addEventListener('resize', onResize);
       document.addEventListener('keydown', onKey);
       document.addEventListener('keyup', onKey);
-
       animate();
     }
 
+    function addCollider(mesh) {
+      collidableBoxes.push(new THREE.Box3().setFromObject(mesh));
+    }
+
+    function spawnObjects(type, count, radius, place) {
+      let placed=0, attempts=0;
+      const maxAtt = count * 100;
+      while(placed < count && attempts < maxAtt) {
+        attempts++;
+        const x = Math.random()*1000-500;
+        const z = Math.random()*1000-500;
+        const y = (type==='mountain'?200:12);
+        const pos = new THREE.Vector3(x,y,z);
+        const test = new THREE.Sphere(pos, radius);
+        if(!collidableBoxes.some(b=>b.intersectsSphere(test))) { place(pos); placed++; }
+      }
+    }
+
+    function spawnDiamonds(count) {
+      const geo = new THREE.OctahedronGeometry(5);
+      const mat = new THREE.MeshPhongMaterial({color:0x00ffff});
+      let placed=0, attempts=0;
+      while(placed < count && attempts < count*50) {
+        attempts++;
+        const x = Math.random()*1000-500;
+        const z = Math.random()*1000-500;
+        const pos = new THREE.Vector3(x,5,z);
+        const test = new THREE.Sphere(pos, playerCollider.radius+1);
+        if(!collidableBoxes.some(b=>b.intersectsSphere(test))) {
+          const d = new THREE.Mesh(geo, mat);
+          d.position.copy(pos);
+          scene.add(d);
+          diamonds.push(d);
+          placed++;
+        }
+      }
+    }
+
+    function spawnMonsters(count) {
+      const geo = new THREE.BoxGeometry(10,20,10);
+      const mat = new THREE.MeshPhongMaterial({color:0xff0000});
+      let placed=0, attempts=0;
+      while(placed < count && attempts < count*50) {
+        attempts++;
+        const x = Math.random()*1000-500;
+        const z = Math.random()*1000-500;
+        const pos = new THREE.Vector3(x,10,z);
+        const test = new THREE.Sphere(pos, monsterCollider.radius+1);
+        if(!collidableBoxes.some(b=>b.intersectsSphere(test))) {
+          const m = new THREE.Mesh(geo, mat);
+          m.position.copy(pos);
+          scene.add(m);
+          monsters.push(m);
+          monsterInitialPositions.push(m.position.clone());
+          placed++;
+        }
+      }
+    }
+
     function onResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.aspect = window.innerWidth/window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
-    const keys = {};
-    function onKey(e) { keys[e.code] = e.type === 'keydown'; }
+    function onKey(e) {
+      if(e.code==='KeyF' && e.type==='keydown') fireworksRunning = !fireworksRunning;
+      keys[e.code] = e.type==='keydown';
+    }
 
     function animate() {
       requestAnimationFrame(animate);
-      if (controls.isLocked) {
-        // Keep constant height
-        controls.getObject().position.y = 10;
-
-        // Move player
-        const delta = 0.1;
-        const dir = new THREE.Vector3(
-          (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0),
-          0,
-          (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0)
-        ).normalize();
-        if (dir.length()) {
-          const vel = dir.multiplyScalar(400 * delta);
-          controls.getObject().translateX(vel.x * delta);
-          controls.getObject().translateZ(vel.z * delta);
+      frameCount++;
+      const fireNow = fireworksRunning || (won && !lost);
+      if(fireNow && frameCount % 60 === 0) {
+        const burstPos = new THREE.Vector3(
+          Math.random()*800-400,
+          Math.random()*100+150,
+          Math.random()*800-400
+        );
+        for(let i=0;i<30;i++) {
+          const p = new FireworkParticle(burstPos);
+          scene.add(p.mesh);
+          fireworks.push(p);
         }
-
-        // Collect diamonds
-        const pos = controls.getObject().position;
-        diamonds.forEach((d, i) => {
-          if (d && d.position.distanceTo(pos) < 10) {
-            scene.remove(d);
-            diamonds[i] = null;
-            scoreEl.textContent = ++score;
-            if (score >= 100 && !won) { won = true; overlay.textContent = 'You Win!'; }
-          }
-        });
-
-        // Monster AI: chase player
-        monsters.forEach(m => {
-          const v = new THREE.Vector3().subVectors(pos, m.position).normalize();
-          m.position.add(v.multiplyScalar(0.5));
-        });
-
-        // Separate overlapping monsters
-        const sepDist = 20;
-        monsters.forEach((a, i) => {
-          monsters.forEach((b, j) => {
-            if (i >= j) return;
-            const dist = a.position.distanceTo(b.position);
-            if (dist < sepDist) {
-              const overlap = sepDist - dist;
-              const push = a.position.clone().sub(b.position).normalize().multiplyScalar(overlap * 0.5);
-              a.position.add(push);
-              b.position.sub(push);
-            }
-          });
-        });
-
-        // Check collisions
-        monsters.forEach(m => {
-          if (m.position.distanceTo(pos) < 10 && !won) {
-            overlay.textContent = 'Game Over';
-            controls.unlock();
-          }
-        });
+      }
+      // update particles
+      for(let i=fireworks.length-1;i>=0;i--) {
+        if(!fireworks[i].update()) { scene.remove(fireworks[i].mesh); fireworks.splice(i,1); }
+      }
+      if(!won && !lost && controls.isLocked) {
+        updatePlayer();
+        updateDiamonds();
+        updateMonsters();
       }
       renderer.render(scene, camera);
+    }
+
+    function updatePlayer() {
+      const pl = controls.getObject(); pl.position.y = 10;
+      const old = pl.position.clone();
+      const dlt = 0.1;
+      const dir = new THREE.Vector3(
+        (keys['KeyD']?1:0)-(keys['KeyA']?1:0),
+        0,
+        (keys['KeyS']?1:0)-(keys['KeyW']?1:0)
+      ).normalize();
+      if(dir.length()) {
+        const v = dir.multiplyScalar(400*dlt);
+        pl.translateX(v.x*dlt);
+        pl.translateZ(v.z*dlt);
+        pl.position.x = Math.max(boundary.min, Math.min(boundary.max, pl.position.x));
+        pl.position.z = Math.max(boundary.min, Math.min(boundary.max, pl.position.z));
+        const sph = new THREE.Sphere(pl.position, playerCollider.radius);
+        for(const b of collidableBoxes) if(b.intersectsSphere(sph)) { pl.position.copy(old); break; }
+      }
+    }
+
+    function updateDiamonds() {
+      diamonds.forEach((d, i) => {
+        if (d && d.position.distanceTo(controls.getObject().position) < 10) {
+          scene.remove(d);
+          diamonds[i] = null;
+          score++;
+          overlay.innerHTML = `Diamonds: ${score}/${totalDiamonds}`;
+          if (score >= totalDiamonds) {
+            won = true;
+            overlay.innerHTML = 'You Win!';
+          }
+        }
+      });
+    }
+
+    function updateMonsters() {
+      monsters.forEach(m => {
+        const v = new THREE.Vector3().subVectors(controls.getObject().position, m.position).
+          normalize().multiplyScalar(0.5);
+        ['x','z'].forEach(ax => {
+          const tp = m.position.clone(); tp[ax] += v[ax];
+          if(!collidableBoxes.some(b => b.intersectsSphere(new THREE.Sphere(tp, monsterCollider.radius)))) {
+            m.position[ax] += v[ax];
+          }
+        });
+        m.position.x = Math.max(boundary.min, Math.min(boundary.max, m.position.x));
+        m.position.z = Math.max(boundary.min, Math.min(boundary.max, m.position.z));
+      });
+      // separate
+      const sep = 20;
+      monsters.forEach((a,i) => { monsters.forEach((b,j) => {
+        if(i >= j) return;
+        const d = a.position.distanceTo(b.position);
+        if(d < sep) {
+          const push = a.position.clone().sub(b.position).
+            normalize().multiplyScalar((sep-d)/2);
+          a.position.add(push);
+          b.position.sub(push);
+        }
+      }); });
+      // catch
+      monsters.forEach(m => {
+        if(m.position.distanceTo(controls.getObject().position) < 10 && !won && !lost) {
+          lost = true;
+          overlay.innerHTML = 'Game Over';
+        }
+      });
+    }
+
+    function resetGame() {
+      score = 0;
+      won = false;
+      lost = false;
+      overlay.innerHTML = overlayHTML;
+      scoreEl.textContent = score;
+      monsters.forEach((m,i) => m.position.copy(monsterInitialPositions[i]));
+      fireworks.forEach(f => scene.remove(f.mesh)); fireworks.length = 0;
+      frameCount = 0;
+      fireworksRunning = false;
     }
   </script>
 </body>
