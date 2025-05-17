@@ -202,6 +202,17 @@
     let gameTime = 0;
     let gameTimer;
 
+    // Player physics for jumping
+    const player = {
+      height: 10,           // Player's height off the ground
+      jumping: false,       // Is player currently jumping?
+      jumpHeight: 60,       // Maximum jump height
+      jumpSpeed: 2,       // Jump velocity
+      gravity: 0.07,        // Gravity force pulling down
+      velocity: 0,          // Current vertical velocity
+      jumpCooldown: 0       // Cooldown timer for jumps
+    };
+
     // Fireworks particle class
     class FireworkParticle {
       constructor(position) {
@@ -595,7 +606,14 @@
           pauseGame();
         }
       }
+
+      // Track all key states
       keys[e.code] = e.type === 'keydown';
+
+      // Prevent spacebar from scrolling the page
+      if (e.code === 'Space') {
+        e.preventDefault();
+      }
     }
 
     function animate() {
@@ -646,7 +664,41 @@
     }
 
     function updatePlayer() {
-      const pl = controls.getObject(); pl.position.y = 10;
+      const pl = controls.getObject();
+
+      // Handle jumping physics
+      if (player.jumping) {
+        // Apply velocity and gravity
+        player.velocity -= player.gravity;
+        pl.position.y += player.velocity;
+
+        // Check if we've hit the ground
+        if (pl.position.y <= player.height) {
+          pl.position.y = player.height;
+          player.jumping = false;
+          player.velocity = 0;
+          player.jumpCooldown = 10; // Set a short cooldown before next jump
+        }
+      } else {
+        // Ensure player is at correct height when not jumping
+        pl.position.y = player.height;
+
+        // Handle jump initiation
+        if (keys['Space'] && player.jumpCooldown <= 0) {
+          player.jumping = true;
+          player.velocity = player.jumpSpeed;
+
+          // Play jump sound
+          playJumpSound();
+        }
+      }
+
+      // Update jump cooldown
+      if (player.jumpCooldown > 0) {
+        player.jumpCooldown--;
+      }
+
+      // Movement
       const old = pl.position.clone();
       const dlt = 0.1;
       const dir = new THREE.Vector3(
@@ -654,6 +706,7 @@
         0,
         (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0)
       ).normalize();
+
       if (dir.length()) {
         const v = dir.multiplyScalar(400 * dlt);
         pl.translateX(v.x * dlt);
@@ -774,8 +827,11 @@
       scoreEl.textContent = score;
       timeElapsedEl.textContent = "0";
 
-      // Reset player position
-      controls.getObject().position.set(0, 10, 0);
+      // Reset player position and physics
+      controls.getObject().position.set(0, player.height, 0);
+      player.jumping = false;
+      player.velocity = 0;
+      player.jumpCooldown = 0;
 
       // Reset monsters
       monsters.forEach((m, i) => {
