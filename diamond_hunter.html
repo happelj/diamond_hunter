@@ -56,6 +56,51 @@
       text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
     }
 
+    #difficultySelector {
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 20px;
+      border-radius: 10px;
+      margin-bottom: 30px;
+      pointer-events: auto;
+    }
+
+    #difficultySelector h2 {
+      color: #fff;
+      font-size: 24px;
+      margin-top: 0;
+      margin-bottom: 15px;
+      text-align: center;
+    }
+
+    .difficultyOptions {
+      display: flex;
+      justify-content: center;
+      gap: 15px;
+    }
+
+    .difficultyBtn {
+      background-color: #333;
+      color: #fff;
+      font-size: 18px;
+      padding: 10px 20px;
+      border: 2px solid #555;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .difficultyBtn.selected {
+      background-color: #00ffff;
+      color: #000;
+      border-color: #00ffff;
+      transform: scale(1.05);
+    }
+
+    .difficultyBtn:hover:not(.selected) {
+      background-color: #444;
+      border-color: #00ffff;
+    }
+
     #startButton {
       background-color: #00ffff;
       color: #000;
@@ -146,6 +191,21 @@
       z-index: 100;
       text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.7);
     }
+
+    /* Difficulty indicator */
+    #difficultyIndicator {
+      position: absolute;
+      top: 70px;
+      right: 20px;
+      color: #fff;
+      font-size: 18px;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 8px 15px;
+      border-radius: 10px;
+      z-index: 100;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.7);
+      display: none;
+    }
   </style>
   <script type="importmap">
   {
@@ -162,25 +222,37 @@
     <div id="overlay" style="display:none;">Diamonds: <span id="score">0</span>/<span id="totalDiamonds">100</span>
     </div>
     <div id="timer" style="display:none;">Time: <span id="timeElapsed">0</span>s</div>
+    <div id="difficultyIndicator" style="display:none;">Difficulty: <span id="currentDifficulty">Normal</span></div>
     <div id="controlsGuide" style="display:none;">
       <strong>Controls:</strong> W,A,S,D to move | Mouse to look | F for fireworks | ESC to pause
     </div>
 
     <div id="startScreen">
       <h1>DIAMOND HUNTER</h1>
+      <div id="difficultySelector">
+        <h2>SELECT DIFFICULTY</h2>
+        <div class="difficultyOptions">
+          <button class="difficultyBtn" data-difficulty="easy">Easy</button>
+          <button class="difficultyBtn selected" data-difficulty="normal">Normal</button>
+          <button class="difficultyBtn" data-difficulty="hard">Hard</button>
+        </div>
+      </div>
       <button id="startButton">START GAME</button>
     </div>
 
     <div id="gameOverScreen">
       <h1>GAME OVER</h1>
       <p style="color: #fff; font-size: 24px;">You collected <span id="finalScore">0</span> diamonds</p>
+      <p style="color: #fff; font-size: 18px;">Difficulty: <span id="gameOverDifficulty">Normal</span></p>
       <button class="restartButton" id="restartButtonGameOver">TRY AGAIN</button>
     </div>
 
     <div id="winScreen">
       <h1>YOU WIN!</h1>
       <p style="color: #fff; font-size: 24px;">You collected all <span id="winTotalDiamonds">100</span> diamonds in
-        <span id="finalTime">0</span> seconds</p>
+        <span id="finalTime">0</span> seconds
+      </p>
+      <p style="color: #fff; font-size: 18px;">Difficulty: <span id="winDifficulty">Normal</span></p>
       <button class="restartButton" id="restartButtonWin">PLAY AGAIN</button>
     </div>
   </div>
@@ -202,12 +274,20 @@
     let gameTime = 0;
     let gameTimer;
 
+    // Difficulty settings
+    const difficulties = {
+      easy: { monsterSpeed: 0.25, name: "Easy" },
+      normal: { monsterSpeed: 0.5, name: "Normal" },
+      hard: { monsterSpeed: 0.8, name: "Hard" }
+    };
+    let currentDifficulty = "normal";
+
     // Player physics for jumping
     const player = {
       height: 10,           // Player's height off the ground
       jumping: false,       // Is player currently jumping?
       jumpHeight: 60,       // Maximum jump height
-      jumpSpeed: 2,       // Jump velocity
+      jumpSpeed: 2,         // Jump velocity
       gravity: 0.07,        // Gravity force pulling down
       velocity: 0,          // Current vertical velocity
       jumpCooldown: 0       // Cooldown timer for jumps
@@ -257,6 +337,11 @@
     let startScreenEl;
     let gameOverScreenEl;
     let winScreenEl;
+    let difficultyIndicatorEl;
+    let currentDifficultyEl;
+    let gameOverDifficultyEl;
+    let winDifficultyEl;
+    let difficultyBtns;
 
     const keys = {};
 
@@ -276,6 +361,20 @@
       startScreenEl = document.getElementById('startScreen');
       gameOverScreenEl = document.getElementById('gameOverScreen');
       winScreenEl = document.getElementById('winScreen');
+      difficultyIndicatorEl = document.getElementById('difficultyIndicator');
+      currentDifficultyEl = document.getElementById('currentDifficulty');
+      gameOverDifficultyEl = document.getElementById('gameOverDifficulty');
+      winDifficultyEl = document.getElementById('winDifficulty');
+      difficultyBtns = document.querySelectorAll('.difficultyBtn');
+
+      // Set up difficulty selection
+      difficultyBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          difficultyBtns.forEach(b => b.classList.remove('selected'));
+          btn.classList.add('selected');
+          currentDifficulty = btn.dataset.difficulty;
+        });
+      });
 
       // Set up buttons
       document.getElementById('startButton').addEventListener('click', () => {
@@ -391,6 +490,11 @@
       gameActive = true;
       gamePaused = false;
 
+      // Update difficulty display
+      currentDifficultyEl.textContent = difficulties[currentDifficulty].name;
+      gameOverDifficultyEl.textContent = difficulties[currentDifficulty].name;
+      winDifficultyEl.textContent = difficulties[currentDifficulty].name;
+
       // Lock controls
       controls.lock();
     }
@@ -403,6 +507,7 @@
         // Show pause screen
         overlayEl.style.display = 'none';
         timerEl.style.display = 'none';
+        difficultyIndicatorEl.style.display = 'none';
         controlsGuideEl.style.display = 'none';
         startScreenEl.style.display = 'flex';
         document.getElementById('startButton').textContent = 'RESUME GAME';
@@ -410,14 +515,25 @@
     }
 
     function resumeGame() {
-      gamePaused = false;
-      startScreenEl.style.display = 'none';
-      controls.lock();
+      if (gamePaused) {
+        gamePaused = false;
+        startScreenEl.style.display = 'none';
+
+        // This is the fix for the resume bug:
+        // We need to explicitly show the UI elements again
+        overlayEl.style.display = 'block';
+        timerEl.style.display = 'block';
+        difficultyIndicatorEl.style.display = 'block';
+        controlsGuideEl.style.display = 'block';
+
+        controls.lock();
+      }
     }
 
     function onLock() {
       overlayEl.style.display = 'block';
       timerEl.style.display = 'block';
+      difficultyIndicatorEl.style.display = 'block';
       controlsGuideEl.style.display = 'block';
     }
 
@@ -435,6 +551,7 @@
 
       // Show game over screen
       finalScoreEl.textContent = score;
+      gameOverDifficultyEl.textContent = difficulties[currentDifficulty].name;
       gameOverScreenEl.style.display = 'flex';
 
       // Stop timer
@@ -449,6 +566,7 @@
 
       // Show win screen
       finalTimeEl.textContent = gameTime;
+      winDifficultyEl.textContent = difficulties[currentDifficulty].name;
       winScreenEl.style.display = 'flex';
 
       // Stop timer
@@ -763,6 +881,32 @@
       }
     }
 
+    function playJumpSound() {
+      try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.type = 'square';
+        oscillator.frequency.setValueAtTime(220, audioContext.currentTime); // A3
+        oscillator.frequency.exponentialRampToValueAtTime(
+          440, audioContext.currentTime + 0.1 // A4
+        );
+
+        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.3);
+      } catch (e) {
+        // Fallback if Web Audio API is not supported
+        console.log("Audio feedback not supported");
+      }
+    }
+
     function updateMonsters() {
       const playerPos = controls.getObject().position;
       monsters.forEach(m => {
@@ -783,7 +927,10 @@
         });
 
         // Step towards player with obstacle avoidance
-        const v = new THREE.Vector3().subVectors(playerPos, m.position).normalize().multiplyScalar(0.5);
+        // Apply difficulty-based speed
+        const speed = difficulties[currentDifficulty].monsterSpeed;
+        const v = new THREE.Vector3().subVectors(playerPos, m.position).normalize().multiplyScalar(speed);
+
         ['x', 'z'].forEach(ax => {
           const tp = m.position.clone();
           tp[ax] += v[ax];
