@@ -178,6 +178,21 @@
       text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
     }
 
+    /* Game tips */
+    #gameTip {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      color: #fff;
+      font-size: 18px;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 10px;
+      max-width: 300px;
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+      display: none;
+    }
+
     /* Timer element */
     #timer {
       position: absolute;
@@ -224,7 +239,11 @@
     <div id="timer" style="display:none;">Time: <span id="timeElapsed">0</span>s</div>
     <div id="difficultyIndicator" style="display:none;">Difficulty: <span id="currentDifficulty">Normal</span></div>
     <div id="controlsGuide" style="display:none;">
-      <strong>Controls:</strong> W,A,S,D to move | Mouse to look | F for fireworks | ESC to pause
+      <strong>Controls:</strong> W,A,S,D to move | Mouse to look | Space to jump | F for fireworks | ESC to pause
+    </div>
+    <div id="gameTip" style="display:none;">
+      <strong>TIP:</strong> Hide in bushes or climb trees to escape monsters. Yellow monsters only chase when you're
+      close!
     </div>
 
     <div id="startScreen">
@@ -264,7 +283,9 @@
     let camera, scene, renderer, controls;
     const diamonds = [];
     const monsters = [];
+    const yellowMonsters = [];
     const monsterInitialPositions = [];
+    const yellowMonsterInitialPositions = [];
     let totalDiamonds = 0;
     let score = 0;
     let won = false;
@@ -276,9 +297,9 @@
 
     // Difficulty settings
     const difficulties = {
-      easy: { monsterSpeed: 0.25, name: "Easy" },
-      normal: { monsterSpeed: 0.5, name: "Normal" },
-      hard: { monsterSpeed: 0.8, name: "Hard" }
+      easy: { monsterSpeed: 0.25, yellowMonsterSpeed: 0.4, name: "Easy" },
+      normal: { monsterSpeed: 0.5, yellowMonsterSpeed: 0.8, name: "Normal" },
+      hard: { monsterSpeed: 0.8, yellowMonsterSpeed: 1.2, name: "Hard" }
     };
     let currentDifficulty = "normal";
 
@@ -290,8 +311,17 @@
       jumpSpeed: 2,         // Jump velocity
       gravity: 0.07,        // Gravity force pulling down
       velocity: 0,          // Current vertical velocity
-      jumpCooldown: 0       // Cooldown timer for jumps
+      jumpCooldown: 0,      // Cooldown timer for jumps
+      insideBush: false,    // Whether player is inside a bush
+      onTree: false,        // Whether player is standing on a tree
+      groundLevel: 10       // Current ground level (10 for ground, higher for trees)
     };
+
+    // Bush data storage
+    const bushes = [];
+
+    // Tree data storage for custom collision and climbing
+    const trees = [];
 
     // Fireworks particle class
     class FireworkParticle {
@@ -319,7 +349,7 @@
     let frameCount = 0;
 
     // Collision boxes & settings
-    const collidableBoxes = [];
+    const collidableBoxes = []; // For non-tree obstacles like fences
     const boundary = { min: -900, max: 900 }; // Reduced for mountain barrier
     const playerCollider = { radius: 4 };
     const monsterCollider = { radius: 5 };
@@ -334,6 +364,7 @@
     let overlayEl;
     let timerEl;
     let controlsGuideEl;
+    let gameTipEl;
     let startScreenEl;
     let gameOverScreenEl;
     let winScreenEl;
@@ -358,6 +389,7 @@
       overlayEl = document.getElementById('overlay');
       timerEl = document.getElementById('timer');
       controlsGuideEl = document.getElementById('controlsGuide');
+      gameTipEl = document.getElementById('gameTip');
       startScreenEl = document.getElementById('startScreen');
       gameOverScreenEl = document.getElementById('gameOverScreen');
       winScreenEl = document.getElementById('winScreen');
@@ -413,15 +445,8 @@
       );
       scene.add(floor);
 
-      // Trees - scattered around the main playing area (not on hills)
-      spawnObjects('tree', 50, 7, (pos) => {
-        const t = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 10, 8), new THREE.MeshPhongMaterial({ color: 0x8b4513 }));
-        t.position.set(pos.x, 5, pos.z);
-        scene.add(t); addCollider(t);
-        const l = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 8), new THREE.MeshPhongMaterial({ color: 0x006400 }));
-        l.position.set(pos.x, 12, pos.z);
-        scene.add(l); addCollider(l);
-      });
+      // Trees with climbing capability
+      spawnTrees(50);
 
       // Clouds
       for (let i = 0; i < 20; i++) {
@@ -444,10 +469,13 @@
       totalDiamondsEl.textContent = totalDiamonds;
       winTotalDiamondsEl.textContent = totalDiamonds;
 
-      // Monsters
-      spawnMonsters(10);
+      // Red Monsters
+      spawnMonsters(8);
 
-      // Set up map boundaries - fence and hills
+      // Yellow Monsters
+      spawnYellowMonsters(5);
+
+      // Set up map boundaries - fence and bushes
       createMapBoundaries();
 
       // Renderer
@@ -509,6 +537,7 @@
         timerEl.style.display = 'none';
         difficultyIndicatorEl.style.display = 'none';
         controlsGuideEl.style.display = 'none';
+        gameTipEl.style.display = 'none';
         startScreenEl.style.display = 'flex';
         document.getElementById('startButton').textContent = 'RESUME GAME';
       }
@@ -525,6 +554,7 @@
         timerEl.style.display = 'block';
         difficultyIndicatorEl.style.display = 'block';
         controlsGuideEl.style.display = 'block';
+        gameTipEl.style.display = 'block';
 
         controls.lock();
       }
@@ -535,6 +565,7 @@
       timerEl.style.display = 'block';
       difficultyIndicatorEl.style.display = 'block';
       controlsGuideEl.style.display = 'block';
+      gameTipEl.style.display = 'block';
     }
 
     function onUnlock() {
@@ -594,6 +625,118 @@
       }
     }
 
+    // Function to spawn trees with climbing capability
+    function spawnTrees(count) {
+      trees.length = 0; // Clear trees array
+
+      let placed = 0, attempts = 0;
+      const maxAtt = count * 100;
+
+      while (placed < count && attempts < maxAtt) {
+        attempts++;
+        const x = Math.random() * 1000 - 500;
+        const z = Math.random() * 1000 - 500;
+
+        // Test position to ensure trees don't overlap
+        const testPosition = new THREE.Vector3(x, 0, z);
+        let canPlace = true;
+
+        // Check against existing trees
+        for (const tree of trees) {
+          const dx = tree.position.x - x;
+          const dz = tree.position.z - z;
+          const distSquared = dx * dx + dz * dz;
+
+          if (distSquared < 400) { // 20 units minimum spacing between trees
+            canPlace = false;
+            break;
+          }
+        }
+
+        if (canPlace) {
+          // Create a tree group
+          const treeGroup = new THREE.Group();
+          treeGroup.position.set(x, 0, z);
+
+          // Tree parameters with random height between 30-50
+          const trunkHeight = 30 + Math.random() * 20; // Random height between 30-50
+          const trunkRadius = 3.5; // Thicker trunk
+
+          // Create trunk with thicker radius
+          const trunk = new THREE.Mesh(
+            new THREE.CylinderGeometry(trunkRadius, trunkRadius, trunkHeight, 10),
+            new THREE.MeshPhongMaterial({ color: 0x8b4513 })
+          );
+          trunk.position.y = trunkHeight / 2;
+          treeGroup.add(trunk);
+
+          // Create foliage - size scaled with trunk height
+          const foliageSize = 15 * (trunkHeight / 40); // Scale foliage with tree height
+
+          // Position main foliage at the top of the trunk
+          const mainFoliage = new THREE.Mesh(
+            new THREE.SphereGeometry(foliageSize, 12, 12),
+            new THREE.MeshPhongMaterial({ color: 0x006400 })
+          );
+          const foliageY = trunkHeight + foliageSize * 0.3;
+          mainFoliage.position.y = foliageY;
+          treeGroup.add(mainFoliage);
+
+          // Add secondary foliage for more natural look
+          const numFoliageClusters = 4 + Math.floor(trunkHeight / 10); // More clusters for taller trees
+          for (let i = 0; i < numFoliageClusters; i++) {
+            const angle = (Math.PI * 2 / numFoliageClusters) * i;
+            const offsetX = Math.cos(angle) * foliageSize * 0.6;
+            const offsetZ = Math.sin(angle) * foliageSize * 0.6;
+
+            // Distribute foliage vertically in the upper third of the tree
+            const heightFactor = 0.7 + (i % 3) * 0.1; // Different heights 
+            const offsetY = trunkHeight * heightFactor + Math.random() * foliageSize * 0.3;
+
+            const subFoliage = new THREE.Mesh(
+              new THREE.SphereGeometry(foliageSize * (0.7 + Math.random() * 0.3), 10, 10),
+              new THREE.MeshPhongMaterial({ color: 0x006400 })
+            );
+            subFoliage.position.set(offsetX, offsetY, offsetZ);
+            treeGroup.add(subFoliage);
+          }
+
+          // For taller trees, add some mid-trunk foliage
+          if (trunkHeight > 40) {
+            const midHeight = trunkHeight * 0.6;
+            for (let i = 0; i < 3; i++) {
+              const angle = (Math.PI * 2 / 3) * i + Math.random() * 0.5;
+              const offsetX = Math.cos(angle) * foliageSize * 0.7;
+              const offsetZ = Math.sin(angle) * foliageSize * 0.7;
+
+              const midFoliage = new THREE.Mesh(
+                new THREE.SphereGeometry(foliageSize * 0.6, 10, 10),
+                new THREE.MeshPhongMaterial({ color: 0x006400 })
+              );
+              midFoliage.position.set(offsetX, midHeight, offsetZ);
+              treeGroup.add(midFoliage);
+            }
+          }
+
+          // Store collision data including climbable area
+          treeGroup.userData = {
+            trunkRadius: trunkRadius + 2, // Add a bit of padding for collision
+            height: trunkHeight,
+            foliageHeight: foliageY,
+            foliageRadius: foliageSize,
+            climbableRadius: foliageSize + 3 // Slightly larger area for climbing
+          };
+
+          // Add to scene and trees array
+          scene.add(treeGroup);
+          trees.push(treeGroup);
+          placed++;
+        }
+      }
+
+      console.log(`Placed ${placed} climbable trees with random heights between 30-50 units`);
+    }
+
     function spawnObjects(type, count, radius, place) {
       let placed = 0, attempts = 0;
       const maxAtt = count * 100;
@@ -637,7 +780,22 @@
           continue; // Skip positions outside boundary
         }
 
-        // Test sphere so the diamond doesn't spawn inside trees/mountains
+        // Check for tree collisions
+        let treeCollision = false;
+        for (const tree of trees) {
+          const dx = tree.position.x - pos.x;
+          const dz = tree.position.z - pos.z;
+          const distSquared = dx * dx + dz * dz;
+
+          if (distSquared < tree.userData.trunkRadius * tree.userData.trunkRadius) {
+            treeCollision = true;
+            break;
+          }
+        }
+
+        if (treeCollision) continue;
+
+        // Test against other colliders
         const testSphere = new THREE.Sphere(pos, playerCollider.radius + 1);
         if (!collidableBoxes.some(b => b.intersectsSphere(testSphere))) {
           const d = new THREE.Mesh(geo, mat);
@@ -676,8 +834,27 @@
         attempts++;
         const x = Math.random() * 1000 - 500, z = Math.random() * 1000 - 500;
         const pos = new THREE.Vector3(x, 10, z);
+
+        // Check for tree collisions
+        let treeCollision = false;
+        for (const tree of trees) {
+          const dx = tree.position.x - pos.x;
+          const dz = tree.position.z - pos.z;
+          const distSquared = dx * dx + dz * dz;
+
+          if (distSquared < tree.userData.trunkRadius * tree.userData.trunkRadius) {
+            treeCollision = true;
+            break;
+          }
+        }
+
+        if (treeCollision) continue;
+
+        // Check other colliders
         if (!collidableBoxes.some(b => b.intersectsSphere(new THREE.Sphere(pos, monsterCollider.radius + 1)))) {
           const mg = new THREE.Group();
+          mg.userData = { type: 'red' };
+
           // Body
           const body = new THREE.Mesh(bodyGeo, bodyMat);
           mg.add(body);
@@ -704,6 +881,79 @@
           scene.add(mg);
           monsters.push(mg);
           monsterInitialPositions.push(pos.clone());
+          placed++;
+        }
+      }
+    }
+
+    function spawnYellowMonsters(count) {
+      yellowMonsters.forEach(m => m && scene.remove(m));
+      yellowMonsters.length = 0;
+      yellowMonsterInitialPositions.length = 0;
+
+      const bodyGeo = new THREE.BoxGeometry(10, 15, 10),
+        bodyMat = new THREE.MeshPhongMaterial({ color: 0xffff00 }), // Yellow body
+        eyeGeo = new THREE.SphereGeometry(1.5, 8, 8),
+        eyeMat = new THREE.MeshPhongMaterial({ color: 0xffffff }),
+        pupilGeo = new THREE.SphereGeometry(0.7, 8, 8),
+        pupilMat = new THREE.MeshPhongMaterial({ color: 0x000000 });
+
+      let placed = 0, attempts = 0;
+      while (placed < count && attempts < count * 50) {
+        attempts++;
+        const x = Math.random() * 1000 - 500, z = Math.random() * 1000 - 500;
+        const pos = new THREE.Vector3(x, 10, z);
+
+        // Check for tree collisions
+        let treeCollision = false;
+        for (const tree of trees) {
+          const dx = tree.position.x - pos.x;
+          const dz = tree.position.z - pos.z;
+          const distSquared = dx * dx + dz * dz;
+
+          if (distSquared < tree.userData.trunkRadius * tree.userData.trunkRadius) {
+            treeCollision = true;
+            break;
+          }
+        }
+
+        if (treeCollision) continue;
+
+        // Check other colliders
+        if (!collidableBoxes.some(b => b.intersectsSphere(new THREE.Sphere(pos, monsterCollider.radius + 1)))) {
+          const mg = new THREE.Group();
+          mg.userData = {
+            type: 'yellow',
+            activationRadius: 80, // Only move when player is within this range
+            pursuitRadius: 120     // Stop pursuing when player gets this far
+          };
+
+          // Body
+          const body = new THREE.Mesh(bodyGeo, bodyMat);
+          mg.add(body);
+          // Eyes (named)
+          const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+          leftEye.name = 'eye';
+          leftEye.position.set(-2.5, 5, 5);
+          mg.add(leftEye);
+          const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+          rightEye.name = 'eye';
+          rightEye.position.set(2.5, 5, 5);
+          mg.add(rightEye);
+          // Pupils (named)
+          const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
+          leftPupil.name = 'pupil';
+          leftPupil.position.set(-2.5, 5, 6);
+          mg.add(leftPupil);
+          const rightPupil = new THREE.Mesh(pupilGeo, pupilMat);
+          rightPupil.name = 'pupil';
+          rightPupil.position.set(2.5, 5, 6);
+          mg.add(rightPupil);
+
+          mg.position.copy(pos);
+          scene.add(mg);
+          yellowMonsters.push(mg);
+          yellowMonsterInitialPositions.push(pos.clone());
           placed++;
         }
       }
@@ -776,13 +1026,84 @@
         updatePlayer();
         updateDiamonds();
         updateMonsters();
+        updateYellowMonsters();
       }
 
       renderer.render(scene, camera);
     }
 
+    function isPlayerInBush() {
+      const playerPos = controls.getObject().position;
+
+      for (const bush of bushes) {
+        // Calculate distance from player to bush center (ignoring Y-axis)
+        const bushCenter = bush.position.clone();
+        const dx = playerPos.x - bushCenter.x;
+        const dz = playerPos.z - bushCenter.z;
+        const distSquared = dx * dx + dz * dz;
+
+        // Check if player is inside this bush (using bush radius squared)
+        if (distSquared < bush.userData.radius * bush.userData.radius) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    function isPlayerOnTree() {
+      const playerPos = controls.getObject().position;
+
+      for (const tree of trees) {
+        // Calculate distance from player to tree center (ignoring Y-axis)
+        const dx = playerPos.x - tree.position.x;
+        const dz = playerPos.z - tree.position.z;
+        const distSquared = dx * dx + dz * dz;
+
+        // Check if player is within climbable radius and above foliage height
+        if (distSquared < tree.userData.climbableRadius * tree.userData.climbableRadius &&
+          playerPos.y >= tree.userData.foliageHeight - 5) {
+          return { onTree: true, treeHeight: tree.userData.foliageHeight };
+        }
+      }
+
+      return { onTree: false, treeHeight: 0 };
+    }
+
+    function checkTreeCollision(position, radius) {
+      // Cylindrical collision check against all trees (only trunks, not foliage)
+      for (const tree of trees) {
+        // Calculate distance from position to tree center (ignoring Y-axis)
+        const dx = position.x - tree.position.x;
+        const dz = position.z - tree.position.z;
+        const distSquared = dx * dx + dz * dz;
+
+        // Only check trunk collision, not foliage (so players can climb)
+        const collisionRadius = tree.userData.trunkRadius + radius;
+        if (distSquared < collisionRadius * collisionRadius) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
     function updatePlayer() {
       const pl = controls.getObject();
+
+      // Check if player is inside any bush
+      player.insideBush = isPlayerInBush();
+
+      // Check if player is on a tree
+      const treeCheck = isPlayerOnTree();
+      player.onTree = treeCheck.onTree;
+
+      // Update ground level based on tree position
+      if (player.onTree) {
+        player.groundLevel = treeCheck.treeHeight;
+      } else {
+        player.groundLevel = 10; // Normal ground level
+      }
 
       // Handle jumping physics
       if (player.jumping) {
@@ -790,16 +1111,24 @@
         player.velocity -= player.gravity;
         pl.position.y += player.velocity;
 
-        // Check if we've hit the ground
-        if (pl.position.y <= player.height) {
-          pl.position.y = player.height;
+        // Check if we've hit the ground (or tree foliage)
+        if (pl.position.y <= player.groundLevel) {
+          pl.position.y = player.groundLevel;
           player.jumping = false;
           player.velocity = 0;
           player.jumpCooldown = 10; // Set a short cooldown before next jump
         }
       } else {
         // Ensure player is at correct height when not jumping
-        pl.position.y = player.height;
+        if (pl.position.y > player.groundLevel) {
+          // Apply gravity when above ground/tree level
+          pl.position.y -= 2;
+          if (pl.position.y < player.groundLevel) {
+            pl.position.y = player.groundLevel;
+          }
+        } else {
+          pl.position.y = player.groundLevel;
+        }
 
         // Handle jump initiation
         if (keys['Space'] && player.jumpCooldown <= 0) {
@@ -831,8 +1160,20 @@
         pl.translateZ(v.z * dlt);
         pl.position.x = Math.max(boundary.min, Math.min(boundary.max, pl.position.x));
         pl.position.z = Math.max(boundary.min, Math.min(boundary.max, pl.position.z));
-        const sph = new THREE.Sphere(pl.position, playerCollider.radius);
-        for (const b of collidableBoxes) if (b.intersectsSphere(sph)) { pl.position.copy(old); break; }
+
+        // Check for tree trunk collisions (not foliage - players can walk through foliage)
+        if (checkTreeCollision(pl.position, playerCollider.radius)) {
+          pl.position.copy(old);
+        } else {
+          // Check other colliders (fences, etc.)
+          const sph = new THREE.Sphere(pl.position, playerCollider.radius);
+          for (const b of collidableBoxes) {
+            if (b.intersectsSphere(sph)) {
+              pl.position.copy(old);
+              break;
+            }
+          }
+        }
       }
     }
 
@@ -909,6 +1250,12 @@
 
     function updateMonsters() {
       const playerPos = controls.getObject().position;
+
+      // If player is inside a bush, red monsters stop moving
+      if (player.insideBush) {
+        return;
+      }
+
       monsters.forEach(m => {
         // Rotate entire monster body on Y to face player
         const dir = new THREE.Vector3()
@@ -931,13 +1278,22 @@
         const speed = difficulties[currentDifficulty].monsterSpeed;
         const v = new THREE.Vector3().subVectors(playerPos, m.position).normalize().multiplyScalar(speed);
 
+        const oldPos = m.position.clone();
+
         ['x', 'z'].forEach(ax => {
           const tp = m.position.clone();
           tp[ax] += v[ax];
-          if (!collidableBoxes.some(b => b.intersectsSphere(new THREE.Sphere(tp, monsterCollider.radius)))) {
-            m.position[ax] += v[ax];
+
+          // Check for tree collisions
+          if (!checkTreeCollision(tp, monsterCollider.radius)) {
+            // Check other colliders
+            const monsterSphere = new THREE.Sphere(tp, monsterCollider.radius);
+            if (!collidableBoxes.some(b => b.intersectsSphere(monsterSphere))) {
+              m.position[ax] += v[ax];
+            }
           }
         });
+
         // Clamp
         m.position.x = Math.max(boundary.min, Math.min(boundary.max, m.position.x));
         m.position.z = Math.max(boundary.min, Math.min(boundary.max, m.position.z));
@@ -957,9 +1313,94 @@
         });
       });
 
-      // Check for catching player
+      // Check for catching player (only if not on tree)
       monsters.forEach(m => {
-        if (m.position.distanceTo(controls.getObject().position) < 10 && !won && !lost) {
+        if (m.position.distanceTo(controls.getObject().position) < 10 && !won && !lost && !player.onTree) {
+          gameOver();
+        }
+      });
+    }
+
+    function updateYellowMonsters() {
+      const playerPos = controls.getObject().position;
+
+      // If player is inside a bush or on a tree, yellow monsters stop moving
+      if (player.insideBush || player.onTree) {
+        return;
+      }
+
+      yellowMonsters.forEach(m => {
+        const distanceToPlayer = m.position.distanceTo(playerPos);
+
+        // Only activate if player is close enough
+        if (distanceToPlayer > m.userData.activationRadius) {
+          return; // Don't move if player is too far
+        }
+
+        // Stop pursuing if player gets too far away
+        if (distanceToPlayer > m.userData.pursuitRadius) {
+          return; // Don't move if player is beyond pursuit range
+        }
+
+        // Rotate entire monster body on Y to face player
+        const dir = new THREE.Vector3()
+          .subVectors(playerPos, m.position)
+          .setY(0)
+          .normalize();
+        if (dir.length()) {
+          m.lookAt(m.position.clone().add(dir));
+        }
+
+        // Eye & pupil tracking
+        m.traverse(obj => {
+          if (obj.name === 'eye' || obj.name === 'pupil') {
+            obj.lookAt(playerPos);
+          }
+        });
+
+        // Step towards player with obstacle avoidance
+        // Apply difficulty-based speed for yellow monsters (faster than red)
+        const speed = difficulties[currentDifficulty].yellowMonsterSpeed;
+        const v = new THREE.Vector3().subVectors(playerPos, m.position).normalize().multiplyScalar(speed);
+
+        const oldPos = m.position.clone();
+
+        ['x', 'z'].forEach(ax => {
+          const tp = m.position.clone();
+          tp[ax] += v[ax];
+
+          // Check for tree collisions
+          if (!checkTreeCollision(tp, monsterCollider.radius)) {
+            // Check other colliders
+            const monsterSphere = new THREE.Sphere(tp, monsterCollider.radius);
+            if (!collidableBoxes.some(b => b.intersectsSphere(monsterSphere))) {
+              m.position[ax] += v[ax];
+            }
+          }
+        });
+
+        // Clamp
+        m.position.x = Math.max(boundary.min, Math.min(boundary.max, m.position.x));
+        m.position.z = Math.max(boundary.min, Math.min(boundary.max, m.position.z));
+      });
+
+      // Separate overlaps between yellow monsters
+      const sep = 20;
+      yellowMonsters.forEach((a, i) => {
+        yellowMonsters.forEach((b, j) => {
+          if (i >= j) return;
+          const d = a.position.distanceTo(b.position);
+          if (d < sep) {
+            const push = a.position.clone().sub(b.position).normalize().multiplyScalar((sep - d) / 2);
+            a.position.add(push);
+            b.position.sub(push);
+          }
+        });
+      });
+
+      // Check for catching player (only if not on tree)
+      yellowMonsters.forEach(m => {
+        if (m.position.distanceTo(controls.getObject().position) < 10 && !won && !lost && !player.onTree) {
           gameOver();
         }
       });
@@ -971,6 +1412,9 @@
       lost = false;
       gamePaused = false;
       gameActive = true;
+      player.insideBush = false;
+      player.onTree = false;
+      player.groundLevel = 10;
       scoreEl.textContent = score;
       timeElapsedEl.textContent = "0";
 
@@ -980,10 +1424,17 @@
       player.velocity = 0;
       player.jumpCooldown = 0;
 
-      // Reset monsters
+      // Reset red monsters
       monsters.forEach((m, i) => {
         if (i < monsterInitialPositions.length) {
           m.position.copy(monsterInitialPositions[i]);
+        }
+      });
+
+      // Reset yellow monsters
+      yellowMonsters.forEach((m, i) => {
+        if (i < yellowMonsterInitialPositions.length) {
+          m.position.copy(yellowMonsterInitialPositions[i]);
         }
       });
 
@@ -1002,6 +1453,9 @@
           scene.remove(child);
         }
       });
+
+      // Clear the bushes array
+      bushes.length = 0;
 
       // Create fence posts and railings around the map
       const fenceHeight = 15;
@@ -1068,49 +1522,107 @@
       scene.add(fenceGroup);
       addCollider(fenceGroup);
 
-      // Create hills with trees
-      createHills();
+      // Create bushes - player can hide inside
+      createBushes();
     }
 
-    function createHills() {
-      // Create some green hills around the map
-      const hillMaterial = new THREE.MeshPhongMaterial({ color: 0x228B22 }); // Forest green
+    function createBushes() {
+      // Create bushes around the map that the player can hide in
+      // Using user specified sizes
 
-      // Hill parameters
-      const numHills = 16;
-      const hillMinRadius = 30;
-      const hillMaxRadius = 60;
-      const hillMinHeight = 15;
-      const hillMaxHeight = 40;
-      const hillDistance = 800; // Distance from center to place hills
+      const bushMaterial = new THREE.MeshPhongMaterial({
+        color: 0x228B22, // Forest green
+        transparent: true,
+        opacity: 0.85 // Slightly transparent to indicate they're special
+      });
 
-      // Create hills group
-      const hillsGroup = new THREE.Group();
-      hillsGroup.userData = { boundary: true };
+      // Bush parameters - user specified sizes
+      const numBushes = 15;
+      const bushMinRadius = 20;
+      const bushMaxRadius = 40;
+      const bushDistance = 800; // Distance from center to place bushes
 
-      for (let i = 0; i < numHills; i++) {
-        // Position hills in a circle near the boundaries
-        const angle = (Math.PI * 2 / numHills) * i;
+      // Create bushes group
+      const bushesGroup = new THREE.Group();
+      bushesGroup.userData = { boundary: true };
+
+      for (let i = 0; i < numBushes; i++) {
+        // Position bushes in a circle around the map
+        const angle = (Math.PI * 2 / numBushes) * i;
         const distVariation = Math.random() * 100 - 50;
-        const baseX = Math.cos(angle) * (hillDistance + distVariation);
-        const baseZ = Math.sin(angle) * (hillDistance + distVariation);
+        const baseX = Math.cos(angle) * (bushDistance + distVariation);
+        const baseZ = Math.sin(angle) * (bushDistance + distVariation);
 
-        // Hill dimensions
-        const radius = hillMinRadius + Math.random() * (hillMaxRadius - hillMinRadius);
-        const height = hillMinHeight + Math.random() * (hillMaxHeight - hillMinHeight);
+        // Bush dimensions
+        const radius = bushMinRadius + Math.random() * (bushMaxRadius - bushMinRadius);
+        const height = radius * 0.8; // Flatter bushes
 
-        // Create hill
-        const hillGeo = new THREE.SphereGeometry(radius, 16, 16);
-        hillGeo.scale(1, height / radius, 1); // Flatten to make it look like a hill
-        hillGeo.translate(0, height / 2 - 5, 0); // Lower into the ground slightly
+        // Create main bush shape
+        const bushGeo = new THREE.SphereGeometry(radius, 12, 12);
+        bushGeo.scale(1, 0.6, 1); // Flatten to make it look more like a bush
+        bushGeo.translate(0, height * 0.6, 0); // Move up so bottom is at ground level
 
-        const hill = new THREE.Mesh(hillGeo, hillMaterial);
-        hill.position.set(baseX, 0, baseZ);
-        hillsGroup.add(hill);
+        const bush = new THREE.Mesh(bushGeo, bushMaterial);
+        bush.position.set(baseX, 0, baseZ);
+        bush.userData = {
+          radius: radius,   // Store radius for collision detection
+          isBush: true      // Mark as a bush
+        };
+
+        // Add the bush to our bushes array for collision detection
+        bushes.push(bush);
+
+        bushesGroup.add(bush);
+
+        // Add some smaller bush shapes to make it look more natural
+        const numBumps = Math.floor(Math.random() * 6) + 4;
+        for (let j = 0; j < numBumps; j++) {
+          const bumpSize = radius * (0.3 + Math.random() * 0.3);
+          const bumpAngle = Math.random() * Math.PI * 2;
+          const bumpDist = radius * 0.7;
+
+          const bumpX = Math.cos(bumpAngle) * bumpDist;
+          const bumpZ = Math.sin(bumpAngle) * bumpDist;
+          const bumpY = height * (0.3 + Math.random() * 0.5);
+
+          const bumpGeo = new THREE.SphereGeometry(bumpSize, 6, 6);
+          const bump = new THREE.Mesh(bumpGeo, bushMaterial);
+          bump.position.set(bumpX, bumpY, bumpZ);
+          bush.add(bump);
+        }
+
+        // Add some random placement bushes for visual interest
+        if (i % 3 === 0) {
+          // Create some additional smaller bushes around the main one
+          const numSmallBushes = Math.floor(Math.random() * 3) + 1;
+          for (let k = 0; k < numSmallBushes; k++) {
+            const smallBushAngle = Math.random() * Math.PI * 2;
+            const smallBushDist = radius * 1.5 + Math.random() * radius;
+            const smallBushX = baseX + Math.cos(smallBushAngle) * smallBushDist;
+            const smallBushZ = baseZ + Math.sin(smallBushAngle) * smallBushDist;
+
+            const smallRadius = radius * (0.3 + Math.random() * 0.4);
+            const smallHeight = smallRadius * 0.8;
+
+            const smallBushGeo = new THREE.SphereGeometry(smallRadius, 8, 8);
+            smallBushGeo.scale(1, 0.6, 1);
+            smallBushGeo.translate(0, smallHeight * 0.6, 0);
+
+            const smallBush = new THREE.Mesh(smallBushGeo, bushMaterial);
+            smallBush.position.set(smallBushX, 0, smallBushZ);
+            smallBush.userData = {
+              radius: smallRadius,
+              isBush: true
+            };
+
+            // Add to bushes array for collision detection
+            bushes.push(smallBush);
+            bushesGroup.add(smallBush);
+          }
+        }
       }
 
-      scene.add(hillsGroup);
-      addCollider(hillsGroup);
+      scene.add(bushesGroup);
     }
   </script>
 </body>
